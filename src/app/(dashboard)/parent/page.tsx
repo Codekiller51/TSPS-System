@@ -1,7 +1,7 @@
 import Announcements from "@/components/Announcements";
 import BigCalendarContainer from "@/components/BigCalendarContainer";
-import prisma from "@/lib/prisma";
-import { auth } from "@clerk/nextjs/server";
+// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
 
 const ParentPage = async () => {

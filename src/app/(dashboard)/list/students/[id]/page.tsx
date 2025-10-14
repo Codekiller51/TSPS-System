@@ -3,9 +3,9 @@ import BigCalendarContainer from "@/components/BigCalendarContainer";
 import FormContainer from "@/components/FormContainer";
 import Performance from "@/components/Performance";
 import StudentAttendanceCard from "@/components/StudentAttendanceCard";
-import prisma from "@/lib/prisma";
-import { auth } from "@clerk/nextjs/server";
-import { Class, Student } from "@prisma/client";
+// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+// import from "@clerk/nextjs/server"; // Removed - using Supabase now
+import { Class, Student } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";

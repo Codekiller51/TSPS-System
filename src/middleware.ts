@@ -1,33 +1,49 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { routeAccessMap } from "./lib/settings";
-import { NextResponse } from "next/server";
+import { type NextRequest } from 'next/server';
+import { updateSession } from '@/lib/supabase/middleware';
+import { routeAccessMap } from './lib/settings';
+import { NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
 
-const matchers = Object.keys(routeAccessMap).map((route) => ({
-  matcher: createRouteMatcher([route]),
-  allowedRoles: routeAccessMap[route],
-}));
+export async function middleware(request: NextRequest) {
+  const response = await updateSession(request);
 
-console.log(matchers);
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+        },
+      },
+    }
+  );
 
-export default clerkMiddleware((auth, req) => {
-  // if (isProtectedRoute(req)) auth().protect()
+  const { data: { user } } = await supabase.auth.getUser();
 
-  const { sessionClaims } = auth();
+  if (!user && !request.nextUrl.pathname.startsWith('/sign-in')) {
+    return NextResponse.redirect(new URL('/sign-in', request.url));
+  }
 
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  if (user) {
+    const role = user.user_metadata?.role as string | undefined;
 
-  for (const { matcher, allowedRoles } of matchers) {
-    if (matcher(req) && !allowedRoles.includes(role!)) {
-      return NextResponse.redirect(new URL(`/${role}`, req.url));
+    for (const [route, allowedRoles] of Object.entries(routeAccessMap)) {
+      const regex = new RegExp(`^${route.replace(/\(\.\*\)/g, '.*')}$`);
+      if (regex.test(request.nextUrl.pathname) && role && !allowedRoles.includes(role)) {
+        return NextResponse.redirect(new URL(`/${role}`, request.url));
+      }
     }
   }
-});
+
+  return response;
+}
 
 export const config = {
   matcher: [
-    // Skip Next.js internals and all static files, unless found in search params
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    // Always run for API routes
-    "/(api|trpc)(.*)",
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

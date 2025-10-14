@@ -2,11 +2,11 @@ import FormModal from "@/components/FormModal";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-import prisma from "@/lib/prisma";
+// import prisma from "@/lib/prisma"; // Removed - using Supabase now
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Assignment, Class, Prisma, Subject, Teacher } from "@prisma/client";
+import { Assignment, Class, Prisma, Subject, Teacher } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
-import { auth } from "@clerk/nextjs/server";
+// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
 type AssignmentList = Assignment & {
   lesson: {

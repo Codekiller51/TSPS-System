@@ -8,8 +8,7 @@ import {
   SubjectSchema,
   TeacherSchema,
 } from "./formValidationSchemas";
-import prisma from "./prisma";
-import { clerkClient } from "@clerk/nextjs/server";
+import { createClient } from "./supabase/server";
 
 type CurrentState = { success: boolean; error: boolean };
 
@@ -18,16 +17,30 @@ export const createSubject = async (
   data: SubjectSchema
 ) => {
   try {
-    await prisma.subject.create({
-      data: {
-        name: data.name,
-        teachers: {
-          connect: data.teachers.map((teacherId) => ({ id: teacherId })),
-        },
-      },
-    });
+    const supabase = await createClient();
 
-    // revalidatePath("/list/subjects");
+    const { data: subject, error: subjectError } = await supabase
+      .from("subjects")
+      .insert({ name: data.name })
+      .select()
+      .single();
+
+    if (subjectError) throw subjectError;
+
+    if (data.teachers && data.teachers.length > 0) {
+      const { error: junctionError } = await supabase
+        .from("teacher_subjects")
+        .insert(
+          data.teachers.map((teacherId) => ({
+            teacher_id: teacherId,
+            subject_id: subject.id,
+          }))
+        );
+
+      if (junctionError) throw junctionError;
+    }
+
+    revalidatePath("/list/subjects");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -40,19 +53,38 @@ export const updateSubject = async (
   data: SubjectSchema
 ) => {
   try {
-    await prisma.subject.update({
-      where: {
-        id: data.id,
-      },
-      data: {
-        name: data.name,
-        teachers: {
-          set: data.teachers.map((teacherId) => ({ id: teacherId })),
-        },
-      },
-    });
+    if (!data.id) return { success: false, error: true };
 
-    // revalidatePath("/list/subjects");
+    const supabase = await createClient();
+
+    const { error: updateError } = await supabase
+      .from("subjects")
+      .update({ name: data.name })
+      .eq("id", data.id);
+
+    if (updateError) throw updateError;
+
+    const { error: deleteError } = await supabase
+      .from("teacher_subjects")
+      .delete()
+      .eq("subject_id", data.id);
+
+    if (deleteError) throw deleteError;
+
+    if (data.teachers && data.teachers.length > 0) {
+      const { error: insertError } = await supabase
+        .from("teacher_subjects")
+        .insert(
+          data.teachers.map((teacherId) => ({
+            teacher_id: teacherId,
+            subject_id: data.id!,
+          }))
+        );
+
+      if (insertError) throw insertError;
+    }
+
+    revalidatePath("/list/subjects");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -66,13 +98,16 @@ export const deleteSubject = async (
 ) => {
   const id = data.get("id") as string;
   try {
-    await prisma.subject.delete({
-      where: {
-        id: parseInt(id),
-      },
-    });
+    const supabase = await createClient();
 
-    // revalidatePath("/list/subjects");
+    const { error } = await supabase
+      .from("subjects")
+      .delete()
+      .eq("id", parseInt(id));
+
+    if (error) throw error;
+
+    revalidatePath("/list/subjects");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -85,11 +120,18 @@ export const createClass = async (
   data: ClassSchema
 ) => {
   try {
-    await prisma.class.create({
-      data,
+    const supabase = await createClient();
+
+    const { error } = await supabase.from("classes").insert({
+      name: data.name,
+      capacity: data.capacity,
+      supervisor_id: data.supervisorId || null,
+      grade_id: data.gradeId,
     });
 
-    // revalidatePath("/list/class");
+    if (error) throw error;
+
+    revalidatePath("/list/classes");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -102,14 +144,23 @@ export const updateClass = async (
   data: ClassSchema
 ) => {
   try {
-    await prisma.class.update({
-      where: {
-        id: data.id,
-      },
-      data,
-    });
+    if (!data.id) return { success: false, error: true };
 
-    // revalidatePath("/list/class");
+    const supabase = await createClient();
+
+    const { error } = await supabase
+      .from("classes")
+      .update({
+        name: data.name,
+        capacity: data.capacity,
+        supervisor_id: data.supervisorId || null,
+        grade_id: data.gradeId,
+      })
+      .eq("id", data.id);
+
+    if (error) throw error;
+
+    revalidatePath("/list/classes");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -123,13 +174,16 @@ export const deleteClass = async (
 ) => {
   const id = data.get("id") as string;
   try {
-    await prisma.class.delete({
-      where: {
-        id: parseInt(id),
-      },
-    });
+    const supabase = await createClient();
 
-    // revalidatePath("/list/class");
+    const { error } = await supabase
+      .from("classes")
+      .delete()
+      .eq("id", parseInt(id));
+
+    if (error) throw error;
+
+    revalidatePath("/list/classes");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -142,36 +196,54 @@ export const createTeacher = async (
   data: TeacherSchema
 ) => {
   try {
-    const user = await clerkClient.users.createUser({
-      username: data.username,
-      password: data.password,
-      firstName: data.name,
-      lastName: data.surname,
-      publicMetadata:{role:"teacher"}
-    });
+    const supabase = await createClient();
 
-    await prisma.teacher.create({
-      data: {
-        id: user.id,
-        username: data.username,
-        name: data.name,
-        surname: data.surname,
-        email: data.email || null,
-        phone: data.phone || null,
-        address: data.address,
-        img: data.img || null,
-        bloodType: data.bloodType,
-        sex: data.sex,
-        birthday: data.birthday,
-        subjects: {
-          connect: data.subjects?.map((subjectId: string) => ({
-            id: parseInt(subjectId),
-          })),
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: `${data.username}@school.com`,
+      password: data.password,
+      options: {
+        data: {
+          role: "teacher",
+          username: data.username,
+          name: data.name,
+          surname: data.surname,
         },
       },
     });
 
-    // revalidatePath("/list/teachers");
+    if (authError) throw authError;
+    if (!authData.user) throw new Error("User creation failed");
+
+    const { error: teacherError } = await supabase.from("teachers").insert({
+      id: authData.user.id,
+      username: data.username,
+      name: data.name,
+      surname: data.surname,
+      email: data.email || null,
+      phone: data.phone || null,
+      address: data.address,
+      img: data.img || null,
+      blood_type: data.bloodType,
+      sex: data.sex,
+      birthday: data.birthday,
+    });
+
+    if (teacherError) throw teacherError;
+
+    if (data.subjects && data.subjects.length > 0) {
+      const { error: subjectsError } = await supabase
+        .from("teacher_subjects")
+        .insert(
+          data.subjects.map((subjectId: string) => ({
+            teacher_id: authData.user!.id,
+            subject_id: parseInt(subjectId),
+          }))
+        );
+
+      if (subjectsError) throw subjectsError;
+    }
+
+    revalidatePath("/list/teachers");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -187,19 +259,19 @@ export const updateTeacher = async (
     return { success: false, error: true };
   }
   try {
-    const user = await clerkClient.users.updateUser(data.id, {
-      username: data.username,
-      ...(data.password !== "" && { password: data.password }),
-      firstName: data.name,
-      lastName: data.surname,
-    });
+    const supabase = await createClient();
 
-    await prisma.teacher.update({
-      where: {
-        id: data.id,
-      },
-      data: {
-        ...(data.password !== "" && { password: data.password }),
+    if (data.password && data.password !== "") {
+      const { error: authError } = await supabase.auth.updateUser({
+        password: data.password,
+      });
+
+      if (authError) throw authError;
+    }
+
+    const { error: teacherError } = await supabase
+      .from("teachers")
+      .update({
         username: data.username,
         name: data.name,
         surname: data.surname,
@@ -207,17 +279,35 @@ export const updateTeacher = async (
         phone: data.phone || null,
         address: data.address,
         img: data.img || null,
-        bloodType: data.bloodType,
+        blood_type: data.bloodType,
         sex: data.sex,
         birthday: data.birthday,
-        subjects: {
-          set: data.subjects?.map((subjectId: string) => ({
-            id: parseInt(subjectId),
-          })),
-        },
-      },
-    });
-    // revalidatePath("/list/teachers");
+      })
+      .eq("id", data.id);
+
+    if (teacherError) throw teacherError;
+
+    const { error: deleteError } = await supabase
+      .from("teacher_subjects")
+      .delete()
+      .eq("teacher_id", data.id);
+
+    if (deleteError) throw deleteError;
+
+    if (data.subjects && data.subjects.length > 0) {
+      const { error: subjectsError } = await supabase
+        .from("teacher_subjects")
+        .insert(
+          data.subjects.map((subjectId: string) => ({
+            teacher_id: data.id!,
+            subject_id: parseInt(subjectId),
+          }))
+        );
+
+      if (subjectsError) throw subjectsError;
+    }
+
+    revalidatePath("/list/teachers");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -231,15 +321,13 @@ export const deleteTeacher = async (
 ) => {
   const id = data.get("id") as string;
   try {
-    await clerkClient.users.deleteUser(id);
+    const supabase = await createClient();
 
-    await prisma.teacher.delete({
-      where: {
-        id: id,
-      },
-    });
+    const { error } = await supabase.from("teachers").delete().eq("id", id);
 
-    // revalidatePath("/list/teachers");
+    if (error) throw error;
+
+    revalidatePath("/list/teachers");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -251,45 +339,62 @@ export const createStudent = async (
   currentState: CurrentState,
   data: StudentSchema
 ) => {
-  console.log(data);
   try {
-    const classItem = await prisma.class.findUnique({
-      where: { id: data.classId },
-      include: { _count: { select: { students: true } } },
-    });
+    const supabase = await createClient();
 
-    if (classItem && classItem.capacity === classItem._count.students) {
+    const { data: classData, error: classError } = await supabase
+      .from("classes")
+      .select("capacity")
+      .eq("id", data.classId)
+      .single();
+
+    if (classError) throw classError;
+
+    const { count } = await supabase
+      .from("students")
+      .select("*", { count: "exact", head: true })
+      .eq("class_id", data.classId);
+
+    if (count !== null && classData.capacity <= count) {
       return { success: false, error: true };
     }
 
-    const user = await clerkClient.users.createUser({
-      username: data.username,
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: `${data.username}@school.com`,
       password: data.password,
-      firstName: data.name,
-      lastName: data.surname,
-      publicMetadata:{role:"student"}
-    });
-
-    await prisma.student.create({
-      data: {
-        id: user.id,
-        username: data.username,
-        name: data.name,
-        surname: data.surname,
-        email: data.email || null,
-        phone: data.phone || null,
-        address: data.address,
-        img: data.img || null,
-        bloodType: data.bloodType,
-        sex: data.sex,
-        birthday: data.birthday,
-        gradeId: data.gradeId,
-        classId: data.classId,
-        parentId: data.parentId,
+      options: {
+        data: {
+          role: "student",
+          username: data.username,
+          name: data.name,
+          surname: data.surname,
+        },
       },
     });
 
-    // revalidatePath("/list/students");
+    if (authError) throw authError;
+    if (!authData.user) throw new Error("User creation failed");
+
+    const { error: studentError } = await supabase.from("students").insert({
+      id: authData.user.id,
+      username: data.username,
+      name: data.name,
+      surname: data.surname,
+      email: data.email || null,
+      phone: data.phone || null,
+      address: data.address,
+      img: data.img || null,
+      blood_type: data.bloodType,
+      sex: data.sex,
+      birthday: data.birthday,
+      grade_id: data.gradeId,
+      class_id: data.classId,
+      parent_id: data.parentId,
+    });
+
+    if (studentError) throw studentError;
+
+    revalidatePath("/list/students");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -305,19 +410,19 @@ export const updateStudent = async (
     return { success: false, error: true };
   }
   try {
-    const user = await clerkClient.users.updateUser(data.id, {
-      username: data.username,
-      ...(data.password !== "" && { password: data.password }),
-      firstName: data.name,
-      lastName: data.surname,
-    });
+    const supabase = await createClient();
 
-    await prisma.student.update({
-      where: {
-        id: data.id,
-      },
-      data: {
-        ...(data.password !== "" && { password: data.password }),
+    if (data.password && data.password !== "") {
+      const { error: authError } = await supabase.auth.updateUser({
+        password: data.password,
+      });
+
+      if (authError) throw authError;
+    }
+
+    const { error: studentError } = await supabase
+      .from("students")
+      .update({
         username: data.username,
         name: data.name,
         surname: data.surname,
@@ -325,15 +430,18 @@ export const updateStudent = async (
         phone: data.phone || null,
         address: data.address,
         img: data.img || null,
-        bloodType: data.bloodType,
+        blood_type: data.bloodType,
         sex: data.sex,
         birthday: data.birthday,
-        gradeId: data.gradeId,
-        classId: data.classId,
-        parentId: data.parentId,
-      },
-    });
-    // revalidatePath("/list/students");
+        grade_id: data.gradeId,
+        class_id: data.classId,
+        parent_id: data.parentId,
+      })
+      .eq("id", data.id);
+
+    if (studentError) throw studentError;
+
+    revalidatePath("/list/students");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -347,15 +455,13 @@ export const deleteStudent = async (
 ) => {
   const id = data.get("id") as string;
   try {
-    await clerkClient.users.deleteUser(id);
+    const supabase = await createClient();
 
-    await prisma.student.delete({
-      where: {
-        id: id,
-      },
-    });
+    const { error } = await supabase.from("students").delete().eq("id", id);
 
-    // revalidatePath("/list/students");
+    if (error) throw error;
+
+    revalidatePath("/list/students");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -367,33 +473,19 @@ export const createExam = async (
   currentState: CurrentState,
   data: ExamSchema
 ) => {
-  // const { userId, sessionClaims } = auth();
-  // const role = (sessionClaims?.metadata as { role?: string })?.role;
-
   try {
-    // if (role === "teacher") {
-    //   const teacherLesson = await prisma.lesson.findFirst({
-    //     where: {
-    //       teacherId: userId!,
-    //       id: data.lessonId,
-    //     },
-    //   });
+    const supabase = await createClient();
 
-    //   if (!teacherLesson) {
-    //     return { success: false, error: true };
-    //   }
-    // }
-
-    await prisma.exam.create({
-      data: {
-        title: data.title,
-        startTime: data.startTime,
-        endTime: data.endTime,
-        lessonId: data.lessonId,
-      },
+    const { error } = await supabase.from("exams").insert({
+      title: data.title,
+      start_time: data.startTime,
+      end_time: data.endTime,
+      lesson_id: data.lessonId,
     });
 
-    // revalidatePath("/list/subjects");
+    if (error) throw error;
+
+    revalidatePath("/list/exams");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -405,36 +497,24 @@ export const updateExam = async (
   currentState: CurrentState,
   data: ExamSchema
 ) => {
-  // const { userId, sessionClaims } = auth();
-  // const role = (sessionClaims?.metadata as { role?: string })?.role;
-
   try {
-    // if (role === "teacher") {
-    //   const teacherLesson = await prisma.lesson.findFirst({
-    //     where: {
-    //       teacherId: userId!,
-    //       id: data.lessonId,
-    //     },
-    //   });
+    if (!data.id) return { success: false, error: true };
 
-    //   if (!teacherLesson) {
-    //     return { success: false, error: true };
-    //   }
-    // }
+    const supabase = await createClient();
 
-    await prisma.exam.update({
-      where: {
-        id: data.id,
-      },
-      data: {
+    const { error } = await supabase
+      .from("exams")
+      .update({
         title: data.title,
-        startTime: data.startTime,
-        endTime: data.endTime,
-        lessonId: data.lessonId,
-      },
-    });
+        start_time: data.startTime,
+        end_time: data.endTime,
+        lesson_id: data.lessonId,
+      })
+      .eq("id", data.id);
 
-    // revalidatePath("/list/subjects");
+    if (error) throw error;
+
+    revalidatePath("/list/exams");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);
@@ -447,19 +527,17 @@ export const deleteExam = async (
   data: FormData
 ) => {
   const id = data.get("id") as string;
-
-  // const { userId, sessionClaims } = auth();
-  // const role = (sessionClaims?.metadata as { role?: string })?.role;
-
   try {
-    await prisma.exam.delete({
-      where: {
-        id: parseInt(id),
-        // ...(role === "teacher" ? { lesson: { teacherId: userId! } } : {}),
-      },
-    });
+    const supabase = await createClient();
 
-    // revalidatePath("/list/subjects");
+    const { error } = await supabase
+      .from("exams")
+      .delete()
+      .eq("id", parseInt(id));
+
+    if (error) throw error;
+
+    revalidatePath("/list/exams");
     return { success: true, error: false };
   } catch (err) {
     console.log(err);

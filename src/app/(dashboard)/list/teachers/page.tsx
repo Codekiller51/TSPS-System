@@ -2,12 +2,12 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-import prisma from "@/lib/prisma";
-import { Class, Prisma, Subject, Teacher } from "@prisma/client";
+// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { Class, Prisma, Subject, Teacher } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
 import Link from "next/link";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { auth } from "@clerk/nextjs/server";
+// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
 type TeacherList = Teacher & { subjects: Subject[] } & { classes: Class[] };
 
