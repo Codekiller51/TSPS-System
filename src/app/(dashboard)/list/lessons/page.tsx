@@ -2,118 +2,123 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Class, Lesson, Prisma, Subject, Teacher } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
-type LessonList = Lesson & { subject: Subject } & { class: Class } & {
-  teacher: Teacher;
+type LessonList = {
+  id: number;
+  name: string;
+  subject: { name: string };
+  class: { name: string };
+  teacher: { name: string; surname: string };
 };
-
 
 const LessonListPage = async ({
   searchParams,
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
 
-const { sessionClaims } = auth();
-const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const columns = [
+    {
+      header: "Subject Name",
+      accessor: "name",
+    },
+    {
+      header: "Class",
+      accessor: "class",
+    },
+    {
+      header: "Teacher",
+      accessor: "teacher",
+      className: "hidden md:table-cell",
+    },
+    ...(role === "admin"
+      ? [
+          {
+            header: "Actions",
+            accessor: "action",
+          },
+        ]
+      : []),
+  ];
 
-
-const columns = [
-  {
-    header: "Subject Name",
-    accessor: "name",
-  },
-  {
-    header: "Class",
-    accessor: "class",
-  },
-  {
-    header: "Teacher",
-    accessor: "teacher",
-    className: "hidden md:table-cell",
-  },
-  ...(role === "admin"
-    ? [
-        {
-          header: "Actions",
-          accessor: "action",
-        },
-      ]
-    : []),
-];
-
-const renderRow = (item: LessonList) => (
-  <tr
-    key={item.id}
-    className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
-  >
-    <td className="flex items-center gap-4 p-4">{item.subject.name}</td>
-    <td>{item.class.name}</td>
-    <td className="hidden md:table-cell">
-      {item.teacher.name + " " + item.teacher.surname}
-    </td>
-    <td>
-      <div className="flex items-center gap-2">
-        {role === "admin" && (
-          <>
-            <FormContainer table="lesson" type="update" data={item} />
-            <FormContainer table="lesson" type="delete" id={item.id} />
-          </>
-        )}
-      </div>
-    </td>
-  </tr>
-);
+  const renderRow = (item: LessonList) => (
+    <tr
+      key={item.id}
+      className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
+    >
+      <td className="flex items-center gap-4 p-4">{item.subject.name}</td>
+      <td>{item.class.name}</td>
+      <td className="hidden md:table-cell">
+        {item.teacher.name + " " + item.teacher.surname}
+      </td>
+      <td>
+        <div className="flex items-center gap-2">
+          {role === "admin" && (
+            <>
+              <FormContainer table="lesson" type="update" data={item} />
+              <FormContainer table="lesson" type="delete" id={item.id} />
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
 
   const { page, ...queryParams } = searchParams;
-
   const p = page ? parseInt(page) : 1;
 
-  // URL PARAMS CONDITION
+  // Build query
+  let query = supabase
+    .from("lessons")
+    .select(`
+      id,
+      name,
+      subjects (
+        name
+      ),
+      classes (
+        name
+      ),
+      teachers (
+        name,
+        surname
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
 
-  const query: Prisma.LessonWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "classId":
-            query.classId = parseInt(value);
-            break;
-          case "teacherId":
-            query.teacherId = value;
-            break;
-          case "search":
-            query.OR = [
-              { subject: { name: { contains: value, mode: "insensitive" } } },
-              { teacher: { name: { contains: value, mode: "insensitive" } } },
-            ];
-            break;
-          default:
-            break;
-        }
-      }
-    }
+  // Apply filters
+  if (queryParams.classId) {
+    query = query.eq("class_id", parseInt(queryParams.classId));
+  }
+  if (queryParams.teacherId) {
+    query = query.eq("teacher_id", queryParams.teacherId);
+  }
+  if (queryParams.search) {
+    query = query.or(`subjects.name.ilike.%${queryParams.search}%,teachers.name.ilike.%${queryParams.search}%`);
   }
 
-  const [data, count] = await prisma.$transaction([
-    prisma.lesson.findMany({
-      where: query,
-      include: {
-        subject: { select: { name: true } },
-        class: { select: { name: true } },
-        teacher: { select: { name: true, surname: true } },
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.lesson.count({ where: query }),
-  ]);
+  const { data: lessonsData } = await query;
+  const { count } = await supabase
+    .from("lessons")
+    .select("*", { count: "exact", head: true });
+
+  // Transform data to match expected format
+  const data = (lessonsData || []).map((lesson: any) => ({
+    id: lesson.id,
+    name: lesson.name,
+    subject: { name: lesson.subjects?.name || "" },
+    class: { name: lesson.classes?.name || "" },
+    teacher: {
+      name: lesson.teachers?.name || "",
+      surname: lesson.teachers?.surname || ""
+    }
+  }));
 
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
@@ -136,7 +141,7 @@ const renderRow = (item: LessonList) => (
       {/* LIST */}
       <Table columns={columns} renderRow={renderRow} data={data} />
       {/* PAGINATION */}
-      <Pagination page={p} count={count} />
+      <Pagination page={p} count={count || 0} />
     </div>
   );
 };

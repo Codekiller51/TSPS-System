@@ -2,117 +2,119 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Parent, Prisma, Student } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
 
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
-
-type ParentList = Parent & { students: Student[] };
+type ParentList = {
+  id: string;
+  name: string;
+  surname: string;
+  email: string | null;
+  phone: string;
+  address: string;
+  students: { name: string; surname: string }[];
+};
 
 const ParentListPage = async ({
   searchParams,
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
 
-const { sessionClaims } = auth();
-const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const columns = [
+    {
+      header: "Info",
+      accessor: "info",
+    },
+    {
+      header: "Student Names",
+      accessor: "students",
+      className: "hidden md:table-cell",
+    },
+    {
+      header: "Phone",
+      accessor: "phone",
+      className: "hidden lg:table-cell",
+    },
+    {
+      header: "Address",
+      accessor: "address",
+      className: "hidden lg:table-cell",
+    },
+    ...(role === "admin"
+      ? [
+          {
+            header: "Actions",
+            accessor: "action",
+          },
+        ]
+      : []),
+  ];
 
-
-const columns = [
-  {
-    header: "Info",
-    accessor: "info",
-  },
-  {
-    header: "Student Names",
-    accessor: "students",
-    className: "hidden md:table-cell",
-  },
-  {
-    header: "Phone",
-    accessor: "phone",
-    className: "hidden lg:table-cell",
-  },
-  {
-    header: "Address",
-    accessor: "address",
-    className: "hidden lg:table-cell",
-  },
-  ...(role === "admin"
-    ? [
-        {
-          header: "Actions",
-          accessor: "action",
-        },
-      ]
-    : []),
-];
-
-const renderRow = (item: ParentList) => (
-  <tr
-    key={item.id}
-    className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
-  >
-    <td className="flex items-center gap-4 p-4">
-      <div className="flex flex-col">
-        <h3 className="font-semibold">{item.name}</h3>
-        <p className="text-xs text-gray-500">{item?.email}</p>
-      </div>
-    </td>
-    <td className="hidden md:table-cell">
-      {item.students.map((student) => student.name).join(",")}
-    </td>
-    <td className="hidden md:table-cell">{item.phone}</td>
-    <td className="hidden md:table-cell">{item.address}</td>
-    <td>
-      <div className="flex items-center gap-2">
-        {role === "admin" && (
-          <>
-            <FormContainer table="parent" type="update" data={item} />
-            <FormContainer table="parent" type="delete" id={item.id} />
-          </>
-        )}
-      </div>
-    </td>
-  </tr>
-);
+  const renderRow = (item: ParentList) => (
+    <tr
+      key={item.id}
+      className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
+    >
+      <td className="flex items-center gap-4 p-4">
+        <div className="flex flex-col">
+          <h3 className="font-semibold">{item.name + " " + item.surname}</h3>
+          <p className="text-xs text-gray-500">{item.email || ""}</p>
+        </div>
+      </td>
+      <td className="hidden md:table-cell">
+        {item.students.map((student) => student.name + " " + student.surname).join(", ")}
+      </td>
+      <td className="hidden md:table-cell">{item.phone}</td>
+      <td className="hidden md:table-cell">{item.address}</td>
+      <td>
+        <div className="flex items-center gap-2">
+          {role === "admin" && (
+            <>
+              <FormContainer table="parent" type="update" data={item} />
+              <FormContainer table="parent" type="delete" id={item.id} />
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
 
   const { page, ...queryParams } = searchParams;
-
   const p = page ? parseInt(page) : 1;
 
-  // URL PARAMS CONDITION
+  // Build query
+  let query = supabase
+    .from("parents")
+    .select(`
+      id,
+      name,
+      surname,
+      email,
+      phone,
+      address,
+      students (
+        name,
+        surname
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
 
-  const query: Prisma.ParentWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "search":
-            query.name = { contains: value, mode: "insensitive" };
-            break;
-          default:
-            break;
-        }
-      }
-    }
+  // Apply search filter
+  if (queryParams.search) {
+    query = query.ilike("name", `%${queryParams.search}%`);
   }
 
-  const [data, count] = await prisma.$transaction([
-    prisma.parent.findMany({
-      where: query,
-      include: {
-        students: true,
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.parent.count({ where: query }),
-  ]);
+  const { data: parentsData } = await query;
+  const { count } = await supabase
+    .from("parents")
+    .select("*", { count: "exact", head: true });
+
+  const data = parentsData || [];
 
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
@@ -135,7 +137,7 @@ const renderRow = (item: ParentList) => (
       {/* LIST */}
       <Table columns={columns} renderRow={renderRow} data={data} />
       {/* PAGINATION */}
-      <Pagination page={p} count={count} />
+      <Pagination page={p} count={count || 0} />
     </div>
   );
 };

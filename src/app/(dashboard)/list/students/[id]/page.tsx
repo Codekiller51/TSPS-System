@@ -3,9 +3,7 @@ import BigCalendarContainer from "@/components/BigCalendarContainer";
 import FormContainer from "@/components/FormContainer";
 import Performance from "@/components/Performance";
 import StudentAttendanceCard from "@/components/StudentAttendanceCard";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
-import { Class, Student } // from "@prisma/client"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -16,19 +14,22 @@ const SingleStudentPage = async ({
 }: {
   params: { id: string };
 }) => {
-  const { sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
 
-  const student:
-    | (Student & {
-        class: Class & { _count: { lessons: number } };
-      })
-    | null = await prisma.student.findUnique({
-    where: { id },
-    include: {
-      class: { include: { _count: { select: { lessons: true } } } },
-    },
-  });
+  const { data: student } = await supabase
+    .from("students")
+    .select(`
+      *,
+      classes (
+        id,
+        name,
+        lessons (count)
+      )
+    `)
+    .eq("id", id)
+    .single();
 
   if (!student) {
     return notFound();
@@ -66,12 +67,12 @@ const SingleStudentPage = async ({
               <div className="flex items-center justify-between gap-2 flex-wrap text-xs font-medium">
                 <div className="w-full md:w-1/3 lg:w-full 2xl:w-1/3 flex items-center gap-2">
                   <Image src="/blood.png" alt="" width={14} height={14} />
-                  <span>{student.bloodType}</span>
+                  <span>{student.blood_type}</span>
                 </div>
                 <div className="w-full md:w-1/3 lg:w-full 2xl:w-1/3 flex items-center gap-2">
                   <Image src="/date.png" alt="" width={14} height={14} />
                   <span>
-                    {new Intl.DateTimeFormat("en-GB").format(student.birthday)}
+                    {new Intl.DateTimeFormat("en-GB").format(new Date(student.birthday))}
                   </span>
                 </div>
                 <div className="w-full md:w-1/3 lg:w-full 2xl:w-1/3 flex items-center gap-2">
@@ -111,7 +112,7 @@ const SingleStudentPage = async ({
               />
               <div className="">
                 <h1 className="text-xl font-semibold">
-                  {student.class.name.charAt(0)}th
+                  {student.classes?.name?.charAt(0) || ""}th
                 </h1>
                 <span className="text-sm text-gray-400">Grade</span>
               </div>
@@ -127,7 +128,7 @@ const SingleStudentPage = async ({
               />
               <div className="">
                 <h1 className="text-xl font-semibold">
-                  {student.class._count.lessons}
+                  {student.classes?.lessons?.length || 0}
                 </h1>
                 <span className="text-sm text-gray-400">Lessons</span>
               </div>
@@ -142,7 +143,7 @@ const SingleStudentPage = async ({
                 className="w-6 h-6"
               />
               <div className="">
-                <h1 className="text-xl font-semibold">{student.class.name}</h1>
+                <h1 className="text-xl font-semibold">{student.classes?.name || ""}</h1>
                 <span className="text-sm text-gray-400">Class</span>
               </div>
             </div>
@@ -151,7 +152,7 @@ const SingleStudentPage = async ({
         {/* BOTTOM */}
         <div className="mt-4 bg-white rounded-md p-4 h-[800px]">
           <h1>Student&apos;s Schedule</h1>
-          <BigCalendarContainer type="classId" id={student.class.id} />
+          <BigCalendarContainer type="classId" id={student.class_id} />
         </div>
       </div>
       {/* RIGHT */}
@@ -161,25 +162,25 @@ const SingleStudentPage = async ({
           <div className="mt-4 flex gap-4 flex-wrap text-xs text-gray-500">
             <Link
               className="p-3 rounded-md bg-lamaSkyLight"
-              href={`/list/lessons?classId=${student.class.id}`}
+              href={`/list/lessons?classId=${student.class_id}`}
             >
               Student&apos;s Lessons
             </Link>
             <Link
               className="p-3 rounded-md bg-lamaPurpleLight"
-              href={`/list/teachers?classId=${student.class.id}`}
+              href={`/list/teachers?classId=${student.class_id}`}
             >
               Student&apos;s Teachers
             </Link>
             <Link
               className="p-3 rounded-md bg-pink-50"
-              href={`/list/exams?classId=${student.class.id}`}
+              href={`/list/exams?classId=${student.class_id}`}
             >
               Student&apos;s Exams
             </Link>
             <Link
               className="p-3 rounded-md bg-lamaSkyLight"
-              href={`/list/assignments?classId=${student.class.id}`}
+              href={`/list/assignments?classId=${student.class_id}`}
             >
               Student&apos;s Assignments
             </Link>

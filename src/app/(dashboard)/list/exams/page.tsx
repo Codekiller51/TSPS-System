@@ -2,17 +2,19 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Class, Exam, Prisma, Subject, Teacher } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
-type ExamList = Exam & {
+type ExamList = {
+  id: number;
+  title: string;
+  start_time: string;
+  end_time: string;
   lesson: {
-    subject: Subject;
-    class: Class;
-    teacher: Teacher;
+    subject: { name: string };
+    class: { name: string };
+    teacher: { name: string; surname: string };
   };
 };
 
@@ -21,146 +23,148 @@ const ExamListPage = async ({
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
+  const currentUserId = user?.id;
 
-const { userId, sessionClaims } = auth();
-const role = (sessionClaims?.metadata as { role?: string })?.role;
-const currentUserId = userId;
+  const columns = [
+    {
+      header: "Subject Name",
+      accessor: "name",
+    },
+    {
+      header: "Class",
+      accessor: "class",
+    },
+    {
+      header: "Teacher",
+      accessor: "teacher",
+      className: "hidden md:table-cell",
+    },
+    {
+      header: "Date",
+      accessor: "date",
+      className: "hidden md:table-cell",
+    },
+    ...(role === "admin" || role === "teacher"
+      ? [
+          {
+            header: "Actions",
+            accessor: "action",
+          },
+        ]
+      : []),
+  ];
 
-
-const columns = [
-  {
-    header: "Subject Name",
-    accessor: "name",
-  },
-  {
-    header: "Class",
-    accessor: "class",
-  },
-  {
-    header: "Teacher",
-    accessor: "teacher",
-    className: "hidden md:table-cell",
-  },
-  {
-    header: "Date",
-    accessor: "date",
-    className: "hidden md:table-cell",
-  },
-  ...(role === "admin" || role === "teacher"
-    ? [
-        {
-          header: "Actions",
-          accessor: "action",
-        },
-      ]
-    : []),
-];
-
-const renderRow = (item: ExamList) => (
-  <tr
-    key={item.id}
-    className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
-  >
-    <td className="flex items-center gap-4 p-4">{item.lesson.subject.name}</td>
-    <td>{item.lesson.class.name}</td>
-    <td className="hidden md:table-cell">
-      {item.lesson.teacher.name + " " + item.lesson.teacher.surname}
-    </td>
-    <td className="hidden md:table-cell">
-      {new Intl.DateTimeFormat("en-US").format(item.startTime)}
-    </td>
-    <td>
-      <div className="flex items-center gap-2">
-        {(role === "admin" || role === "teacher") && (
-          <>
-            <FormContainer table="exam" type="update" data={item} />
-            <FormContainer table="exam" type="delete" id={item.id} />
-          </>
-        )}
-      </div>
-    </td>
-  </tr>
-);
+  const renderRow = (item: ExamList) => (
+    <tr
+      key={item.id}
+      className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
+    >
+      <td className="flex items-center gap-4 p-4">{item.lesson.subject.name}</td>
+      <td>{item.lesson.class.name}</td>
+      <td className="hidden md:table-cell">
+        {item.lesson.teacher.name + " " + item.lesson.teacher.surname}
+      </td>
+      <td className="hidden md:table-cell">
+        {new Intl.DateTimeFormat("en-US").format(new Date(item.start_time))}
+      </td>
+      <td>
+        <div className="flex items-center gap-2">
+          {(role === "admin" || role === "teacher") && (
+            <>
+              <FormContainer table="exam" type="update" data={item} />
+              <FormContainer table="exam" type="delete" id={item.id} />
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
 
   const { page, ...queryParams } = searchParams;
-
   const p = page ? parseInt(page) : 1;
 
-  // URL PARAMS CONDITION
+  // Build base query
+  let query = supabase
+    .from("exams")
+    .select(`
+      id,
+      title,
+      start_time,
+      end_time,
+      lessons (
+        id,
+        name,
+        teacher_id,
+        class_id,
+        subjects (
+          name
+        ),
+        classes (
+          name
+        ),
+        teachers (
+          name,
+          surname
+        )
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
 
-  const query: Prisma.ExamWhereInput = {};
-
-  query.lesson = {};
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "classId":
-            query.lesson.classId = parseInt(value);
-            break;
-          case "teacherId":
-            query.lesson.teacherId = value;
-            break;
-          case "search":
-            query.lesson.subject = {
-              name: { contains: value, mode: "insensitive" },
-            };
-            break;
-          default:
-            break;
-        }
-      }
+  // Apply role-based filtering
+  if (role === "teacher" && currentUserId) {
+    query = query.eq("lessons.teacher_id", currentUserId);
+  } else if (role === "student" && currentUserId) {
+    // Get student's class first
+    const { data: studentData } = await supabase
+      .from("students")
+      .select("class_id")
+      .eq("id", currentUserId)
+      .single();
+    
+    if (studentData) {
+      query = query.eq("lessons.class_id", studentData.class_id);
+    }
+  } else if (role === "parent" && currentUserId) {
+    // Get parent's children's classes
+    const { data: childrenData } = await supabase
+      .from("students")
+      .select("class_id")
+      .eq("parent_id", currentUserId);
+    
+    if (childrenData && childrenData.length > 0) {
+      const classIds = childrenData.map(child => child.class_id);
+      query = query.in("lessons.class_id", classIds);
     }
   }
 
-  // ROLE CONDITIONS
-
-  switch (role) {
-    case "admin":
-      break;
-    case "teacher":
-      query.lesson.teacherId = currentUserId!;
-      break;
-    case "student":
-      query.lesson.class = {
-        students: {
-          some: {
-            id: currentUserId!,
-          },
-        },
-      };
-      break;
-    case "parent":
-      query.lesson.class = {
-        students: {
-          some: {
-            parentId: currentUserId!,
-          },
-        },
-      };
-      break;
-
-    default:
-      break;
+  // Apply search filter
+  if (queryParams.search) {
+    query = query.ilike("lessons.subjects.name", `%${queryParams.search}%`);
   }
 
-  const [data, count] = await prisma.$transaction([
-    prisma.exam.findMany({
-      where: query,
-      include: {
-        lesson: {
-          select: {
-            subject: { select: { name: true } },
-            teacher: { select: { name: true, surname: true } },
-            class: { select: { name: true } },
-          },
-        },
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.exam.count({ where: query }),
-  ]);
+  const { data: examsData } = await query;
+  const { count } = await supabase
+    .from("exams")
+    .select("*", { count: "exact", head: true });
+
+  // Transform data to match expected format
+  const data = (examsData || []).map((exam: any) => ({
+    id: exam.id,
+    title: exam.title,
+    start_time: exam.start_time,
+    end_time: exam.end_time,
+    lesson: {
+      subject: { name: exam.lessons?.subjects?.name || "" },
+      class: { name: exam.lessons?.classes?.name || "" },
+      teacher: {
+        name: exam.lessons?.teachers?.name || "",
+        surname: exam.lessons?.teachers?.surname || ""
+      }
+    }
+  }));
 
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
@@ -185,7 +189,7 @@ const renderRow = (item: ExamList) => (
       {/* LIST */}
       <Table columns={columns} renderRow={renderRow} data={data} />
       {/* PAGINATION */}
-      <Pagination page={p} count={count} />
+      <Pagination page={p} count={count || 0} />
     </div>
   );
 };

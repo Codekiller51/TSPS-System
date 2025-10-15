@@ -1,18 +1,19 @@
-import FormModal from "@/components/FormModal";
+import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Assignment, Class, Prisma, Subject, Teacher } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
-type AssignmentList = Assignment & {
+type AssignmentList = {
+  id: number;
+  title: string;
+  due_date: string;
   lesson: {
-    subject: Subject;
-    class: Class;
-    teacher: Teacher;
+    subject: { name: string };
+    class: { name: string };
+    teacher: { name: string; surname: string };
   };
 };
 
@@ -21,12 +22,11 @@ const AssignmentListPage = async ({
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
+  const currentUserId = user?.id;
 
-  const { userId, sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
-  const currentUserId = userId;
-  
-  
   const columns = [
     {
       header: "Subject Name",
@@ -55,7 +55,7 @@ const AssignmentListPage = async ({
         ]
       : []),
   ];
-  
+
   const renderRow = (item: AssignmentList) => (
     <tr
       key={item.id}
@@ -67,14 +67,14 @@ const AssignmentListPage = async ({
         {item.lesson.teacher.name + " " + item.lesson.teacher.surname}
       </td>
       <td className="hidden md:table-cell">
-        {new Intl.DateTimeFormat("en-US").format(item.dueDate)}
+        {new Intl.DateTimeFormat("en-US").format(new Date(item.due_date))}
       </td>
       <td>
         <div className="flex items-center gap-2">
           {(role === "admin" || role === "teacher") && (
             <>
-              <FormModal table="assignment" type="update" data={item} />
-              <FormModal table="assignment" type="delete" id={item.id} />
+              <FormContainer table="assignment" type="update" data={item} />
+              <FormContainer table="assignment" type="delete" id={item.id} />
             </>
           )}
         </div>
@@ -83,84 +83,86 @@ const AssignmentListPage = async ({
   );
 
   const { page, ...queryParams } = searchParams;
-
   const p = page ? parseInt(page) : 1;
 
-  // URL PARAMS CONDITION
+  // Build base query
+  let query = supabase
+    .from("assignments")
+    .select(`
+      id,
+      title,
+      due_date,
+      lessons (
+        id,
+        name,
+        teacher_id,
+        class_id,
+        subjects (
+          name
+        ),
+        classes (
+          name
+        ),
+        teachers (
+          name,
+          surname
+        )
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
 
-  const query: Prisma.AssignmentWhereInput = {};
-
-  query.lesson = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "classId":
-            query.lesson.classId = parseInt(value);
-            break;
-          case "teacherId":
-            query.lesson.teacherId = value;
-            break;
-          case "search":
-            query.lesson.subject = {
-              name: { contains: value, mode: "insensitive" },
-            };
-            break;
-          default:
-            break;
-        }
-      }
+  // Apply role-based filtering
+  if (role === "teacher" && currentUserId) {
+    query = query.eq("lessons.teacher_id", currentUserId);
+  } else if (role === "student" && currentUserId) {
+    // Get student's class first
+    const { data: studentData } = await supabase
+      .from("students")
+      .select("class_id")
+      .eq("id", currentUserId)
+      .single();
+    
+    if (studentData) {
+      query = query.eq("lessons.class_id", studentData.class_id);
+    }
+  } else if (role === "parent" && currentUserId) {
+    // Get parent's children's classes
+    const { data: childrenData } = await supabase
+      .from("students")
+      .select("class_id")
+      .eq("parent_id", currentUserId);
+    
+    if (childrenData && childrenData.length > 0) {
+      const classIds = childrenData.map(child => child.class_id);
+      query = query.in("lessons.class_id", classIds);
     }
   }
 
-  // ROLE CONDITIONS
-
-  switch (role) {
-    case "admin":
-      break;
-    case "teacher":
-      query.lesson.teacherId = currentUserId!;
-      break;
-    case "student":
-      query.lesson.class = {
-        students: {
-          some: {
-            id: currentUserId!,
-          },
-        },
-      };
-      break;
-    case "parent":
-      query.lesson.class = {
-        students: {
-          some: {
-            parentId: currentUserId!,
-          },
-        },
-      };
-      break;
-    default:
-      break;
+  // Apply search filter
+  if (queryParams.search) {
+    query = query.ilike("lessons.subjects.name", `%${queryParams.search}%`);
   }
 
-  const [data, count] = await prisma.$transaction([
-    prisma.assignment.findMany({
-      where: query,
-      include: {
-        lesson: {
-          select: {
-            subject: { select: { name: true } },
-            teacher: { select: { name: true, surname: true } },
-            class: { select: { name: true } },
-          },
-        },
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.assignment.count({ where: query }),
-  ]);
+  const { data: assignmentsData } = await query;
+  const { count } = await supabase
+    .from("assignments")
+    .select("*", { count: "exact", head: true });
+
+  // Transform data to match expected format
+  const data = (assignmentsData || []).map((assignment: any) => ({
+    id: assignment.id,
+    title: assignment.title,
+    due_date: assignment.due_date,
+    lesson: {
+      subject: { name: assignment.lessons?.subjects?.name || "" },
+      class: { name: assignment.lessons?.classes?.name || "" },
+      teacher: {
+        name: assignment.lessons?.teachers?.name || "",
+        surname: assignment.lessons?.teachers?.surname || ""
+      }
+    }
+  }));
+
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
       {/* TOP */}
@@ -177,17 +179,16 @@ const AssignmentListPage = async ({
             <button className="w-8 h-8 flex items-center justify-center rounded-full bg-lamaYellow">
               <Image src="/sort.png" alt="" width={14} height={14} />
             </button>
-            {role === "admin" ||
-              (role === "teacher" && (
-                <FormModal table="assignment" type="create" />
-              ))}
+            {(role === "admin" || role === "teacher") && (
+              <FormContainer table="assignment" type="create" />
+            )}
           </div>
         </div>
       </div>
       {/* LIST */}
       <Table columns={columns} renderRow={renderRow} data={data} />
       {/* PAGINATION */}
-      <Pagination page={p} count={count} />
+      <Pagination page={p} count={count || 0} />
     </div>
   );
 };

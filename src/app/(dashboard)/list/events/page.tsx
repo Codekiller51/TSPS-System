@@ -2,23 +2,28 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Class, Event, Prisma } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
-type EventList = Event & { class: Class };
+type EventList = {
+  id: number;
+  title: string;
+  description: string;
+  start_time: string;
+  end_time: string;
+  class: { name: string } | null;
+};
 
 const EventListPage = async ({
   searchParams,
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
-
-  const { userId, sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
-  const currentUserId = userId;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
+  const currentUserId = user?.id;
 
   const columns = [
     {
@@ -62,17 +67,17 @@ const EventListPage = async ({
       <td className="flex items-center gap-4 p-4">{item.title}</td>
       <td>{item.class?.name || "-"}</td>
       <td className="hidden md:table-cell">
-        {new Intl.DateTimeFormat("en-US").format(item.startTime)}
+        {new Intl.DateTimeFormat("en-US").format(new Date(item.start_time))}
       </td>
       <td className="hidden md:table-cell">
-        {item.startTime.toLocaleTimeString("en-US", {
+        {new Date(item.start_time).toLocaleTimeString("en-US", {
           hour: "2-digit",
           minute: "2-digit",
           hour12: false,
         })}
       </td>
       <td className="hidden md:table-cell">
-        {item.endTime.toLocaleTimeString("en-US", {
+        {new Date(item.end_time).toLocaleTimeString("en-US", {
           hour: "2-digit",
           minute: "2-digit",
           hour12: false,
@@ -92,53 +97,87 @@ const EventListPage = async ({
   );
 
   const { page, ...queryParams } = searchParams;
-
   const p = page ? parseInt(page) : 1;
 
-  // URL PARAMS CONDITION
+  // Build base query
+  let query = supabase
+    .from("events")
+    .select(`
+      id,
+      title,
+      description,
+      start_time,
+      end_time,
+      class_id,
+      classes (
+        name
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
 
-  const query: Prisma.EventWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "search":
-            query.title = { contains: value, mode: "insensitive" };
-            break;
-          default:
-            break;
-        }
+  // Apply role-based filtering
+  if (role !== "admin" && currentUserId) {
+    if (role === "student") {
+      // Get student's class
+      const { data: studentData } = await supabase
+        .from("students")
+        .select("class_id")
+        .eq("id", currentUserId)
+        .single();
+      
+      if (studentData) {
+        query = query.or(`class_id.is.null,class_id.eq.${studentData.class_id}`);
+      } else {
+        query = query.is("class_id", null);
+      }
+    } else if (role === "teacher") {
+      // Get teacher's classes
+      const { data: teacherClasses } = await supabase
+        .from("lessons")
+        .select("class_id")
+        .eq("teacher_id", currentUserId);
+      
+      const classIds = teacherClasses?.map(lesson => lesson.class_id) || [];
+      if (classIds.length > 0) {
+        query = query.or(`class_id.is.null,class_id.in.(${classIds.join(",")})`);
+      } else {
+        query = query.is("class_id", null);
+      }
+    } else if (role === "parent") {
+      // Get parent's children's classes
+      const { data: childrenData } = await supabase
+        .from("students")
+        .select("class_id")
+        .eq("parent_id", currentUserId);
+      
+      const classIds = childrenData?.map(child => child.class_id) || [];
+      if (classIds.length > 0) {
+        query = query.or(`class_id.is.null,class_id.in.(${classIds.join(",")})`);
+      } else {
+        query = query.is("class_id", null);
       }
     }
   }
 
-  // ROLE CONDITIONS
+  // Apply search filter
+  if (queryParams.search) {
+    query = query.ilike("title", `%${queryParams.search}%`);
+  }
 
-  const roleConditions = {
-    teacher: { lessons: { some: { teacherId: currentUserId! } } },
-    student: { students: { some: { id: currentUserId! } } },
-    parent: { students: { some: { parentId: currentUserId! } } },
-  };
+  const { data: eventsData } = await query;
+  const { count } = await supabase
+    .from("events")
+    .select("*", { count: "exact", head: true });
 
-  query.OR = [
-    { classId: null },
-    {
-      class: roleConditions[role as keyof typeof roleConditions] || {},
-    },
-  ];
-
-  const [data, count] = await prisma.$transaction([
-    prisma.event.findMany({
-      where: query,
-      include: {
-        class: true,
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.event.count({ where: query }),
-  ]);
+  // Transform data to match expected format
+  const data = (eventsData || []).map((event: any) => ({
+    id: event.id,
+    title: event.title,
+    description: event.description,
+    start_time: event.start_time,
+    end_time: event.end_time,
+    class: event.classes ? { name: event.classes.name } : null
+  }));
 
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
@@ -161,7 +200,7 @@ const EventListPage = async ({
       {/* LIST */}
       <Table columns={columns} renderRow={renderRow} data={data} />
       {/* PAGINATION */}
-      <Pagination page={p} count={count} />
+      <Pagination page={p} count={count || 0} />
     </div>
   );
 };

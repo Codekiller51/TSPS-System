@@ -1,11 +1,8 @@
 import Announcements from "@/components/Announcements";
 import BigCalendarContainer from "@/components/BigCalendarContainer";
-import BigCalendar from "@/components/BigCalender";
 import FormContainer from "@/components/FormContainer";
 import Performance from "@/components/Performance";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
-import { Teacher } // from "@prisma/client"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -15,29 +12,39 @@ const SingleTeacherPage = async ({
 }: {
   params: { id: string };
 }) => {
-  const { sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
 
-  const teacher:
-    | (Teacher & {
-        _count: { subjects: number; lessons: number; classes: number };
-      })
-    | null = await prisma.teacher.findUnique({
-    where: { id },
-    include: {
-      _count: {
-        select: {
-          subjects: true,
-          lessons: true,
-          classes: true,
-        },
-      },
-    },
-  });
+  const { data: teacher } = await supabase
+    .from("teachers")
+    .select(`
+      *,
+      teacher_subjects (
+        subjects (
+          name
+        )
+      ),
+      lessons (
+        id,
+        classes (
+          name
+        )
+      )
+    `)
+    .eq("id", id)
+    .single();
 
   if (!teacher) {
     return notFound();
   }
+
+  // Calculate counts
+  const subjectsCount = teacher.teacher_subjects?.length || 0;
+  const lessonsCount = teacher.lessons?.length || 0;
+  const uniqueClasses = new Set(teacher.lessons?.map((lesson: any) => lesson.classes?.name).filter(Boolean));
+  const classesCount = uniqueClasses.size;
+
   return (
     <div className="flex-1 p-4 flex flex-col gap-4 xl:flex-row">
       {/* LEFT */}
@@ -70,12 +77,12 @@ const SingleTeacherPage = async ({
               <div className="flex items-center justify-between gap-2 flex-wrap text-xs font-medium">
                 <div className="w-full md:w-1/3 lg:w-full 2xl:w-1/3 flex items-center gap-2">
                   <Image src="/blood.png" alt="" width={14} height={14} />
-                  <span>{teacher.bloodType}</span>
+                  <span>{teacher.blood_type}</span>
                 </div>
                 <div className="w-full md:w-1/3 lg:w-full 2xl:w-1/3 flex items-center gap-2">
                   <Image src="/date.png" alt="" width={14} height={14} />
                   <span>
-                    {new Intl.DateTimeFormat("en-GB").format(teacher.birthday)}
+                    {new Intl.DateTimeFormat("en-GB").format(new Date(teacher.birthday))}
                   </span>
                 </div>
                 <div className="w-full md:w-1/3 lg:w-full 2xl:w-1/3 flex items-center gap-2">
@@ -115,9 +122,7 @@ const SingleTeacherPage = async ({
                 className="w-6 h-6"
               />
               <div className="">
-                <h1 className="text-xl font-semibold">
-                  {teacher._count.subjects}
-                </h1>
+                <h1 className="text-xl font-semibold">{subjectsCount}</h1>
                 <span className="text-sm text-gray-400">Branches</span>
               </div>
             </div>
@@ -131,9 +136,7 @@ const SingleTeacherPage = async ({
                 className="w-6 h-6"
               />
               <div className="">
-                <h1 className="text-xl font-semibold">
-                  {teacher._count.lessons}
-                </h1>
+                <h1 className="text-xl font-semibold">{lessonsCount}</h1>
                 <span className="text-sm text-gray-400">Lessons</span>
               </div>
             </div>
@@ -147,9 +150,7 @@ const SingleTeacherPage = async ({
                 className="w-6 h-6"
               />
               <div className="">
-                <h1 className="text-xl font-semibold">
-                  {teacher._count.classes}
-                </h1>
+                <h1 className="text-xl font-semibold">{classesCount}</h1>
                 <span className="text-sm text-gray-400">Classes</span>
               </div>
             </div>
@@ -166,7 +167,7 @@ const SingleTeacherPage = async ({
         <div className="bg-white p-4 rounded-md">
           <h1 className="text-xl font-semibold">Shortcuts</h1>
           <div className="mt-4 flex gap-4 flex-wrap text-xs text-gray-500">
-           <Link
+            <Link
               className="p-3 rounded-md bg-lamaSkyLight"
               href={`/list/classes?supervisorId=${teacher.id}`}
             >
