@@ -1,15 +1,22 @@
 import Image from "next/image";
 import CountChart from "./CountChart";
-import prisma from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 
 const CountChartContainer = async () => {
-  const data = await prisma.student.groupBy({
-    by: ["sex"],
-    _count: true,
-  });
+  const supabase = await createClient();
+  
+  const { data: maleStudents } = await supabase
+    .from("students")
+    .select("*", { count: "exact", head: true })
+    .eq("sex", "MALE");
+    
+  const { data: femaleStudents } = await supabase
+    .from("students")
+    .select("*", { count: "exact", head: true })
+    .eq("sex", "FEMALE");
 
-  const boys = data.find((d) => d.sex === "MALE")?._count || 0;
-  const girls = data.find((d) => d.sex === "FEMALE")?._count || 0;
+  const boys = maleStudents?.length || 0;
+  const girls = femaleStudents?.length || 0;
 
   return (
     <div className="bg-white rounded-xl w-full h-full p-4">

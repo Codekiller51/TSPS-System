@@ -1,28 +1,55 @@
-import prisma from "@/lib/prisma";
-import { auth } from "@clerk/nextjs/server";
+import { createClient } from "@/lib/supabase/server";
 
 const Announcements = async () => {
-  const { userId, sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
+  const currentUserId = user?.id;
 
-  const roleConditions = {
-    teacher: { lessons: { some: { teacherId: userId! } } },
-    student: { students: { some: { id: userId! } } },
-    parent: { students: { some: { parentId: userId! } } },
-  };
+  let query = supabase
+    .from("announcements")
+    .select(`
+      *,
+      classes (
+        name,
+        students (
+          id,
+          parent_id
+        ),
+        lessons (
+          teacher_id
+        )
+      )
+    `)
+    .order("date", { ascending: false })
+    .limit(3);
 
-  const data = await prisma.announcement.findMany({
-    take: 3,
-    orderBy: { date: "desc" },
-    where: {
-      ...(role !== "admin" && {
-        OR: [
-          { classId: null },
-          { class: roleConditions[role as keyof typeof roleConditions] || {} },
-        ],
-      }),
-    },
-  });
+  // For non-admin users, we'll filter on the client side for now
+  // In a production app, you'd want to create a more sophisticated RLS policy
+  const { data: allData } = await query;
+  
+  let data = allData || [];
+  
+  if (role !== "admin" && currentUserId) {
+    data = data.filter((announcement) => {
+      // Show global announcements (no class)
+      if (!announcement.class_id) return true;
+      
+      const classData = announcement.classes;
+      if (!classData) return false;
+      
+      switch (role) {
+        case "teacher":
+          return classData.lessons?.some((lesson: any) => lesson.teacher_id === currentUserId);
+        case "student":
+          return classData.students?.some((student: any) => student.id === currentUserId);
+        case "parent":
+          return classData.students?.some((student: any) => student.parent_id === currentUserId);
+        default:
+          return false;
+      }
+    });
+  }
 
   return (
     <div className="bg-white p-4 rounded-md">
@@ -36,7 +63,7 @@ const Announcements = async () => {
             <div className="flex items-center justify-between">
               <h2 className="font-medium">{data[0].title}</h2>
               <span className="text-xs text-gray-400 bg-white rounded-md px-1 py-1">
-                {new Intl.DateTimeFormat("en-GB").format(data[0].date)}
+                {new Intl.DateTimeFormat("en-GB").format(new Date(data[0].date))}
               </span>
             </div>
             <p className="text-sm text-gray-400 mt-1">{data[0].description}</p>
@@ -47,7 +74,7 @@ const Announcements = async () => {
             <div className="flex items-center justify-between">
               <h2 className="font-medium">{data[1].title}</h2>
               <span className="text-xs text-gray-400 bg-white rounded-md px-1 py-1">
-                {new Intl.DateTimeFormat("en-GB").format(data[1].date)}
+                {new Intl.DateTimeFormat("en-GB").format(new Date(data[1].date))}
               </span>
             </div>
             <p className="text-sm text-gray-400 mt-1">{data[1].description}</p>
@@ -58,7 +85,7 @@ const Announcements = async () => {
             <div className="flex items-center justify-between">
               <h2 className="font-medium">{data[2].title}</h2>
               <span className="text-xs text-gray-400 bg-white rounded-md px-1 py-1">
-                {new Intl.DateTimeFormat("en-GB").format(data[2].date)}
+                {new Intl.DateTimeFormat("en-GB").format(new Date(data[2].date))}
               </span>
             </div>
             <p className="text-sm text-gray-400 mt-1">{data[2].description}</p>

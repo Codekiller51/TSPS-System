@@ -2,21 +2,24 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Prisma, Subject, Teacher } // from "@prisma/client"; // Removed - using Supabase now
 import Image from "next/image";
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
-type SubjectList = Subject & { teachers: Teacher[] };
+type SubjectList = {
+  id: number;
+  name: string;
+  teachers: { name: string }[];
+};
 
 const SubjectListPage = async ({
   searchParams,
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
-  const { sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
 
   const columns = [
     {
@@ -60,36 +63,36 @@ const SubjectListPage = async ({
 
   const p = page ? parseInt(page) : 1;
 
-  // URL PARAMS CONDITION
+  // Build query
+  let query = supabase
+    .from("subjects")
+    .select(`
+      id,
+      name,
+      teacher_subjects (
+        teachers (
+          name
+        )
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
 
-  const query: Prisma.SubjectWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "search":
-            query.name = { contains: value, mode: "insensitive" };
-            break;
-          default:
-            break;
-        }
-      }
-    }
+  // Apply search filter
+  if (queryParams.search) {
+    query = query.ilike("name", `%${queryParams.search}%`);
   }
 
-  const [data, count] = await prisma.$transaction([
-    prisma.subject.findMany({
-      where: query,
-      include: {
-        teachers: true,
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.subject.count({ where: query }),
-  ]);
+  const { data: subjectsData, error } = await query;
+  const { count } = await supabase
+    .from("subjects")
+    .select("*", { count: "exact", head: true });
 
+  // Transform data to match expected format
+  const data = (subjectsData || []).map((subject: any) => ({
+    id: subject.id,
+    name: subject.name,
+    teachers: subject.teacher_subjects?.map((ts: any) => ts.teachers).filter(Boolean) || []
+  }));
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
       {/* TOP */}

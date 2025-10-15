@@ -2,23 +2,26 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import { ITEM_PER_PAGE } from "@/lib/settings";
 import { Class, Prisma, Teacher } // from "@prisma/client"; // Removed - using Supabase now
-import Image from "next/image";
 // import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
-type ClassList = Class & { supervisor: Teacher };
+type ClassList = {
+  id: number;
+  name: string;
+  capacity: number;
+  supervisor: { name: string; surname: string } | null;
+};
 
 const ClassListPage = async ({
   searchParams,
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
-
-const { sessionClaims } = auth();
-const role = (sessionClaims?.metadata as { role?: string })?.role;
-
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
 
 const columns = [
   {
@@ -77,39 +80,41 @@ const renderRow = (item: ClassList) => (
   const { page, ...queryParams } = searchParams;
 
   const p = page ? parseInt(page) : 1;
-
-  // URL PARAMS CONDITION
-
-  const query: Prisma.ClassWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "supervisorId":
-            query.supervisorId = value;
-            break;
-          case "search":
-            query.name = { contains: value, mode: "insensitive" };
-            break;
-          default:
-            break;
-        }
-      }
-    }
+  // Build query
+  let query = supabase
+    .from("classes")
+    .select(`
+      id,
+      name,
+      capacity,
+      supervisor_id,
+      teachers (
+        name,
+        surname
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
   }
-
-  const [data, count] = await prisma.$transaction([
-    prisma.class.findMany({
-      where: query,
-      include: {
-        supervisor: true,
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.class.count({ where: query }),
+  // Apply filters
+  if (queryParams.supervisorId) {
+    query = query.eq("supervisor_id", queryParams.supervisorId);
+  }
+  if (queryParams.search) {
+    query = query.ilike("name", `%${queryParams.search}%`);
+  }
   ]);
+  const { data: classesData } = await query;
+  const { count } = await supabase
+    .from("classes")
+    .select("*", { count: "exact", head: true });
+
+  // Transform data to match expected format
+  const data = (classesData || []).map((classItem: any) => ({
+    id: classItem.id,
+    name: classItem.name,
+    capacity: classItem.capacity,
+    supervisor: classItem.teachers || null
+  }));
 
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
@@ -117,7 +122,7 @@ const renderRow = (item: ClassList) => (
       <div className="flex items-center justify-between">
         <h1 className="hidden md:block text-lg font-semibold">All Classes</h1>
         <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
-          <TableSearch />
+        {item.supervisor ? item.supervisor.name + " " + item.supervisor.surname : "-"}
           <div className="flex items-center gap-4 self-end">
             <button className="w-8 h-8 flex items-center justify-center rounded-full bg-lamaYellow">
               <Image src="/filter.png" alt="" width={14} height={14} />

@@ -2,22 +2,33 @@ import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
-// import prisma from "@/lib/prisma"; // Removed - using Supabase now
-import { Class, Prisma, Subject, Teacher } // from "@prisma/client"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 import Image from "next/image";
 import Link from "next/link";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
 
-type TeacherList = Teacher & { subjects: Subject[] } & { classes: Class[] };
+type TeacherList = {
+  id: string;
+  username: string;
+  name: string;
+  surname: string;
+  email: string | null;
+  phone: string | null;
+  address: string;
+  img: string | null;
+  subjects: { name: string }[];
+  classes: { name: string }[];
+};
 
 const TeacherListPage = async ({
   searchParams,
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
-  const { sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
+  
   const columns = [
     {
       header: "Info",
@@ -73,7 +84,7 @@ const TeacherListPage = async ({
         />
         <div className="flex flex-col">
           <h3 className="font-semibold">{item.name}</h3>
-          <p className="text-xs text-gray-500">{item?.email}</p>
+          <p className="text-xs text-gray-500">{item.email || ""}</p>
         </div>
       </td>
       <td className="hidden md:table-cell">{item.username}</td>
@@ -81,7 +92,7 @@ const TeacherListPage = async ({
         {item.subjects.map((subject) => subject.name).join(",")}
       </td>
       <td className="hidden md:table-cell">
-        {item.classes.map((classItem) => classItem.name).join(",")}
+        {item.classes.map((cls) => cls.name).join(",")}
       </td>
       <td className="hidden md:table-cell">{item.phone}</td>
       <td className="hidden md:table-cell">{item.address}</td>
@@ -93,57 +104,60 @@ const TeacherListPage = async ({
             </button>
           </Link>
           {role === "admin" && (
-            // <button className="w-7 h-7 flex items-center justify-center rounded-full bg-lamaPurple">
-            //   <Image src="/delete.png" alt="" width={16} height={16} />
-            // </button>
             <FormContainer table="teacher" type="delete" id={item.id} />
           )}
         </div>
       </td>
     </tr>
   );
+  
   const { page, ...queryParams } = searchParams;
 
   const p = page ? parseInt(page) : 1;
 
-  // URL PARAMS CONDITION
+  // Build query
+  let query = supabase
+    .from("teachers")
+    .select(`
+      id,
+      username,
+      name,
+      surname,
+      email,
+      phone,
+      address,
+      img,
+      teacher_subjects (
+        subjects (
+          name
+        )
+      ),
+      lessons (
+        classes (
+          name
+        )
+      )
+    `)
+    .range((p - 1) * ITEM_PER_PAGE, p * ITEM_PER_PAGE - 1);
 
-  const query: Prisma.TeacherWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "classId":
-            query.lessons = {
-              some: {
-                classId: parseInt(value),
-              },
-            };
-            break;
-          case "search":
-            query.name = { contains: value, mode: "insensitive" };
-            break;
-          default:
-            break;
-        }
-      }
-    }
+  // Apply filters
+  if (queryParams.search) {
+    query = query.ilike("name", `%${queryParams.search}%`);
   }
 
-  const [data, count] = await prisma.$transaction([
-    prisma.teacher.findMany({
-      where: query,
-      include: {
-        subjects: true,
-        classes: true,
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.teacher.count({ where: query }),
-  ]);
+  const { data: teachersData } = await query;
+  const { count } = await supabase
+    .from("teachers")
+    .select("*", { count: "exact", head: true });
 
+  // Transform data to match expected format
+  const data = (teachersData || []).map((teacher: any) => ({
+    ...teacher,
+    subjects: teacher.teacher_subjects?.map((ts: any) => ts.subjects).filter(Boolean) || [],
+    classes: Array.from(new Set(
+      teacher.lessons?.map((lesson: any) => lesson.classes?.name).filter(Boolean) || []
+    )).map(name => ({ name }))
+  }));
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
       {/* TOP */}

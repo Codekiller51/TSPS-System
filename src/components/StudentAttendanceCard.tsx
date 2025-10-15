@@ -1,17 +1,17 @@
-import prisma from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 
 const StudentAttendanceCard = async ({ id }: { id: string }) => {
-  const attendance = await prisma.attendance.findMany({
-    where: {
-      studentId: id,
-      date: {
-        gte: new Date(new Date().getFullYear(), 0, 1),
-      },
-    },
-  });
+  const supabase = await createClient();
+  const startOfYear = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+  
+  const { data: attendance } = await supabase
+    .from("attendances")
+    .select("present")
+    .eq("student_id", id)
+    .gte("date", startOfYear);
 
-  const totalDays = attendance.length;
-  const presentDays = attendance.filter((day) => day.present).length;
+  const totalDays = attendance?.length || 0;
+  const presentDays = attendance?.filter((day) => day.present).length || 0;
   const percentage = (presentDays / totalDays) * 100;
   return (
     <div className="">

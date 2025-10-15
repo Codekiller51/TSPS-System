@@ -1,6 +1,6 @@
-import prisma from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 import FormModal from "./FormModal";
-import { auth } from "@clerk/nextjs/server";
+import { createClient as createClientServer } from "@/lib/supabase/server";
 
 export type FormContainerProps = {
   table:
@@ -23,51 +23,66 @@ export type FormContainerProps = {
 
 const FormContainer = async ({ table, type, data, id }: FormContainerProps) => {
   let relatedData = {};
+  const supabase = await createClient();
 
-  const { userId, sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
-  const currentUserId = userId;
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = user?.user_metadata?.role as string;
+  const currentUserId = user?.id;
 
   if (type !== "delete") {
     switch (table) {
       case "subject":
-        const subjectTeachers = await prisma.teacher.findMany({
-          select: { id: true, name: true, surname: true },
-        });
-        relatedData = { teachers: subjectTeachers };
+        const { data: subjectTeachers } = await supabase
+          .from("teachers")
+          .select("id, name, surname");
+        relatedData = { teachers: subjectTeachers || [] };
         break;
       case "class":
-        const classGrades = await prisma.grade.findMany({
-          select: { id: true, level: true },
-        });
-        const classTeachers = await prisma.teacher.findMany({
-          select: { id: true, name: true, surname: true },
-        });
-        relatedData = { teachers: classTeachers, grades: classGrades };
+        const { data: classGrades } = await supabase
+          .from("grades")
+          .select("id, level");
+        const { data: classTeachers } = await supabase
+          .from("teachers")
+          .select("id, name, surname");
+        relatedData = { 
+          teachers: classTeachers || [], 
+          grades: classGrades || [] 
+        };
         break;
       case "teacher":
-        const teacherSubjects = await prisma.subject.findMany({
-          select: { id: true, name: true },
-        });
-        relatedData = { subjects: teacherSubjects };
+        const { data: teacherSubjects } = await supabase
+          .from("subjects")
+          .select("id, name");
+        relatedData = { subjects: teacherSubjects || [] };
         break;
       case "student":
-        const studentGrades = await prisma.grade.findMany({
-          select: { id: true, level: true },
-        });
-        const studentClasses = await prisma.class.findMany({
-          include: { _count: { select: { students: true } } },
-        });
-        relatedData = { classes: studentClasses, grades: studentGrades };
+        const { data: studentGrades } = await supabase
+          .from("grades")
+          .select("id, level");
+        const { data: studentClasses } = await supabase
+          .from("classes")
+          .select(`
+            id,
+            name,
+            capacity,
+            students (count)
+          `);
+        relatedData = { 
+          classes: studentClasses || [], 
+          grades: studentGrades || [] 
+        };
         break;
       case "exam":
-        const examLessons = await prisma.lesson.findMany({
-          where: {
-            ...(role === "teacher" ? { teacherId: currentUserId! } : {}),
-          },
-          select: { id: true, name: true },
-        });
-        relatedData = { lessons: examLessons };
+        let lessonsQuery = supabase
+          .from("lessons")
+          .select("id, name");
+        
+        if (role === "teacher" && currentUserId) {
+          lessonsQuery = lessonsQuery.eq("teacher_id", currentUserId);
+        }
+        
+        const { data: examLessons } = await lessonsQuery;
+        relatedData = { lessons: examLessons || [] };
         break;
 
       default:

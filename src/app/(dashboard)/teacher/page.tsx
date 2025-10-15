@@ -1,16 +1,18 @@
 import Announcements from "@/components/Announcements";
 import BigCalendarContainer from "@/components/BigCalendarContainer";
-// import from "@clerk/nextjs/server"; // Removed - using Supabase now
+import { createClient } from "@/lib/supabase/server";
 
-const TeacherPage = () => {
-  const { userId } = auth();
+const TeacherPage = async () => {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  
   return (
     <div className="flex-1 p-4 flex gap-4 flex-col xl:flex-row">
       {/* LEFT */}
       <div className="w-full xl:w-2/3">
         <div className="h-full bg-white p-4 rounded-md">
           <h1 className="text-xl font-semibold">Schedule</h1>
-          <BigCalendarContainer type="teacherId" id={userId!} />
+          <BigCalendarContainer type="teacherId" id={user?.id || ""} />
         </div>
       </div>
       {/* RIGHT */}

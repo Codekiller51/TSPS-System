@@ -1,6 +1,6 @@
 import Image from "next/image";
 import AttendanceChart from "./AttendanceChart";
-import prisma from "@/lib/prisma";
+import { createClient } from "@/lib/supabase/server";
 
 const AttendanceChartContainer = async () => {
   const today = new Date();
@@ -11,17 +11,12 @@ const AttendanceChartContainer = async () => {
 
   lastMonday.setDate(today.getDate() - daysSinceMonday);
 
-  const resData = await prisma.attendance.findMany({
-    where: {
-      date: {
-        gte: lastMonday,
-      },
-    },
-    select: {
-      date: true,
-      present: true,
-    },
-  });
+  const supabase = await createClient();
+  
+  const { data: resData } = await supabase
+    .from("attendances")
+    .select("date, present")
+    .gte("date", lastMonday.toISOString().split('T')[0]);
 
   // console.log(data)
 
@@ -36,7 +31,7 @@ const AttendanceChartContainer = async () => {
       Fri: { present: 0, absent: 0 },
     };
 
-  resData.forEach((item) => {
+  (resData || []).forEach((item) => {
     const itemDate = new Date(item.date);
     const dayOfWeek = itemDate.getDay();
     
