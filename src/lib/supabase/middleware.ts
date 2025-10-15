@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr';
+import { TempAdminManager } from '@/lib/temp-admin';
 import { NextResponse, type NextRequest } from 'next/server';
 
 export async function updateSession(request: NextRequest) {
@@ -30,6 +31,24 @@ export async function updateSession(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  // Validate temporary admin if applicable
+  if (user) {
+    const isTempAdmin = user.user_metadata?.temp_admin as boolean;
+
+    if (isTempAdmin) {
+      const tempAdminManager = new TempAdminManager();
+      const validation = await tempAdminManager.validateTempAdmin(user.id);
+      
+      if (!validation.isValid) {
+        // Force logout for invalid temp admin
+        const response = NextResponse.redirect(new URL('/sign-in', request.url));
+        response.cookies.delete('sb-access-token');
+        response.cookies.delete('sb-refresh-token');
+        return response;
+      }
+    }
+  }
 
   if (
     !user &&

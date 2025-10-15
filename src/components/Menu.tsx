@@ -108,6 +108,12 @@ const menuItems = [
         visible: ["admin", "teacher", "student", "parent"],
       },
       {
+        icon: "/profile.png",
+        label: "Temp Admins",
+        href: "/admin/temp-admins",
+        visible: ["admin"],
+      },
+      {
         icon: "/logout.png",
         label: "Logout",
         href: "/logout",
@@ -121,6 +127,7 @@ const Menu = async () => {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const role = user?.user_metadata?.role as string;
+  const isTempAdmin = user?.user_metadata?.temp_admin as boolean;
   
   return (
     <div className="mt-4 text-sm">
@@ -130,6 +137,11 @@ const Menu = async () => {
             {i.title}
           </span>
           {i.items.map((item) => {
+            // Hide temp admin management from temp admins themselves
+            if (item.href === "/admin/temp-admins" && isTempAdmin) {
+              return null;
+            }
+            
             if (item.visible.includes(role)) {
               return (
                 <Link
